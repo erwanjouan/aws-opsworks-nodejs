@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  opsWorksStackName:
+    Type: String
+  DefaultVpcId:
+    Type: String
+  DefaultSubnets:
+    Type: CommaDelimitedList
+Resources:
+  ec2Role:
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Description: Opswork EC2 role to download artif and register to stack
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Sid: S3Permission
+                Effect: Allow
+                Action:
+                  - s3:GetObject*
+                  - opsworks:RegisterInstance
+                  - opsworks:DeregisterInstance
+                  - opsworks:DescribeInstances
+                Resource: "*"
+            Version: '2012-10-17'
+          PolicyName: s3Policy
+    Type: AWS::IAM::Role
+  instanceProfile:
+    Properties:
+      Roles:
+      - !Ref ec2Role
+    Type: AWS::IAM::InstanceProfile
+  serviceRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - opsworks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Description: Opswork service role
+      Policies:
+        - PolicyName: opsworkServicePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:GetMetricStatistics
+                  - ec2:*
+                  - ecs:*
+                  - elasticloadbalancing:*
+                  - iam:PassRole
+                  - iam:GetRolePolicy
+                  - iam:ListInstanceProfiles
+                  - iam:ListRoles
+                  - iam:ListUsers
+                  - rds:*
+                Resource: "*"
+    Type: AWS::IAM::Role
+  opsworkStack:
+    Properties:
+      DefaultInstanceProfileArn: !GetAtt [instanceProfile,Arn]
+      DefaultSubnetId: !Select [ 0, !Ref DefaultSubnets ]
+      Name: !Ref opsWorksStackName
+      ServiceRoleArn: !GetAtt [serviceRole,Arn]
+      VpcId: !Ref DefaultVpcId
+      DefaultOs: Amazon Linux 2
+      ConfigurationManager:
+        Name: Chef
+        Version: 12
+      UseCustomCookbooks: True
+      CustomCookbooksSource:
+        Type: archive
+        Url: https://s3.amazonaws.com/opsworks-demo-assets/opsworks-linux-demo-cookbooks-nodejs.tar.gz
+    Type: AWS::OpsWorks::Stack
+  opsWorksLayer:
+    Properties:
+      AutoAssignElasticIps: true
+      AutoAssignPublicIps: true
+      EnableAutoHealing: false
+      Name: !Ref opsWorksStackName
+      Shortname: !Ref opsWorksStackName
+      CustomSecurityGroupIds:
+        - !GetAtt [opsWorksInstanceSecurityGroup,GroupId]
+      CustomRecipes:
+        Deploy:
+          - nodejs_demo::default
+      StackId: !Ref opsworkStack
+      Type: custom
+    Type: AWS::OpsWorks::Layer
+  opsWorksApp:
+    Properties:
+      Name: !Ref opsWorksStackName
+      AppSource:
+        Type: git
+        Url: https://github.com/awslabs/opsworks-windows-demo-nodejs.git
+      StackId: !Ref opsworkStack
+      Type: other
+    Type: AWS::OpsWorks::App
+  opsWorksInstance:
+    Properties:
+      InstanceType: t2.micro
+      SshKeyName: k2
+      RootDeviceType: ebs
+      LayerIds: [ !Ref opsWorksLayer ]
+      StackId: !Ref opsworkStack
+      VirtualizationType: hvm
+    Type: AWS::OpsWorks::Instance
+  opsWorksInstanceSecurityGroup:
+    Properties:
+      GroupDescription: allow access to EC2 from internet
+      VpcId: !Ref DefaultVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+    Type: AWS::EC2::SecurityGroup
+
